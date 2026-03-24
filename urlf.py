@@ -17,6 +17,7 @@ class Colors:
     CYAN = '\033[96m'
     GREEN = '\033[92m'
     YELLOW = '\033[93m'
+    WHITE = '\033[97m'
     RED = '\033[91m'
     BOLD = '\033[1m'
     END = '\033[0m'
@@ -37,6 +38,22 @@ class URLFormatter:
         self.enable_user_detection = enable_user_detection
         self.max_depth = max_depth
 
+    def is_meaningful_text(self, text):
+        if not text:
+            return False
+
+        # remove whitespace
+        stripped = text.strip()
+
+        # too short → ignore
+        if len(stripped) < 3:
+            return False
+
+        # check printable ratio
+        printable = sum(c.isprintable() for c in stripped)
+        ratio = printable / len(stripped)
+
+        return ratio > 0.9
     # =========================
     # COLOR
     # =========================
@@ -71,14 +88,18 @@ class URLFormatter:
             layers += 1
 
         return current, layers
+    # =========================
+    # Base64 decoding 
+    # =========================
 
-    # =========================
-    # BASE64
-    # =========================
     def is_base64(self, value):
-        if len(value) < 8:
+        try:
+            v = value.replace('-', '+').replace('_', '/')
+            v += '=' * (-len(v) % 4)
+            decoded = base64.b64decode(v, validate=True)
+            return True
+        except Exception:
             return False
-        return bool(re.fullmatch(r'[A-Za-z0-9_\-+/=]+', value))
 
     def decode_base64(self, value):
         try:
@@ -110,6 +131,28 @@ class URLFormatter:
 
         return users
 
+        # =========================
+        # Fragment section
+        # =========================
+    def parse_fragment(self, fragment):
+        if not fragment:
+            return None, []
+
+        # key=value style
+        if "=" in fragment:
+            parts = fragment.split("&")
+            result = []
+
+            for part in parts:
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                else:
+                    k, v = part, ""
+                result.append((k, v))
+
+            return None, result
+        # raw fragment
+        return fragment, []
     # =========================
     # ANALYSIS
     # =========================
@@ -146,11 +189,18 @@ class URLFormatter:
         # Base64 → JSON chain
         if not j and self.is_base64(decoded):
             b = self.decode_base64(decoded)
-            if b and b != decoded:
-                result["base64"] = b
-                j = try_json(b)
 
-        if j:
+            if b:
+                b = b.strip()
+
+            if b and b != decoded and self.is_meaningful_text(b):
+                result["base64"] = b
+
+                j2 = try_json(b)
+                if isinstance(j2, (dict, list)):
+                    result["json"] = j2
+
+        if isinstance(j, (dict, list)):
             result["json"] = j
 
         # Users
@@ -191,7 +241,8 @@ class URLFormatter:
         # Host + decoding
         decoded_host, layers = self.decode_url(parsed.netloc)
 
-        lines.append(self.color(f"{parsed.scheme}://{parsed.netloc}", Colors.BLUE, True))
+        lines.append(self.color("=" * 60, Colors.CYAN))
+        lines.append(self.color("  [TARGET]", Colors.BLUE, True) + " " + self.color(f"{parsed.scheme}://{parsed.netloc}", Colors.WHITE, True))
 
         if layers:
             lines.append(f"  {self.color('[host decoded]', Colors.CYAN)} = {decoded_host}")
@@ -206,16 +257,16 @@ class URLFormatter:
 
         # Path
         if parsed.path:
-            lines.append(f"  Path: {self.color(parsed.path, Colors.GREEN)}")
+            lines.append(f"  {self.color('[path]',Colors.BLUE)} {self.color(parsed.path, Colors.WHITE)}")
 
         params = parse_qsl(parsed.query, keep_blank_values=True)
 
         if params:
-            lines.append(self.color("\nQuery Params:", Colors.YELLOW, True))
-
+            lines.append(self.color("\n  Query Params:", Colors.YELLOW, True))
+        
         for k, v in params:
             key_color = Colors.RED if k.lower() in self.SENSITIVE_PARAMS else Colors.YELLOW
-            lines.append(f"  {self.color(k, key_color)} = {self.color(v, Colors.GREEN)}")
+            lines.append(f"     {self.color(k, key_color)} = {self.color(v, Colors.GREEN)}")
 
             analysis = self.analyze(k, v)
 
@@ -232,14 +283,39 @@ class URLFormatter:
             if analysis["json"]:
                 lines.append(f"    {self.color('[json]', Colors.CYAN)}:")
                 pretty_json = json.dumps(analysis["json"], indent=4)
-                lines.append(pretty_json)
+                for line in pretty_json.splitlines():
+                    lines.append(f"      {line}")
 
             for t, u in analysis["users"]:
                 lines.append(f"    {self.color('[user]', Colors.CYAN)} {t}: {u}")
 
             for w in analysis["warnings"]:
                 lines.append(f"    {self.color('[!]', Colors.RED)} {w}")
+        # =========================
+        # FRAGMENT
+        # =========================
+        raw_fragment, frag_params = self.parse_fragment(parsed.fragment)
 
+        if parsed.fragment:
+            lines.append(self.color("\n  Fragment:", Colors.YELLOW, True))
+
+            if frag_params:
+                for k, v in frag_params:
+                    lines.append(f"     {self.color(k, Colors.YELLOW)} = {self.color(v, Colors.GREEN)}")
+
+                    analysis = self.analyze(k, v)
+
+                    if analysis["decoded"]:
+                        lines.append(f"    {self.color('[decoded]', Colors.CYAN)} = {analysis['decoded']}")
+
+                    if analysis["base64"]:
+                        lines.append(f"    {self.color('[base64]', Colors.CYAN)} = {analysis['base64']}")
+
+                    for w in analysis["warnings"]:
+                        lines.append(f"    {self.color('[!]', Colors.RED)} {w}")
+            else:
+                lines.append(f"  {self.color('[raw]', Colors.CYAN)} {raw_fragment}")
+        lines.append(f"\n  {self.color('Url:', Colors.YELLOW)} {self.color(url, Colors.GREEN)}")
         return "\n".join(lines)
 
     def write_output(text, file=None):
@@ -261,7 +337,7 @@ class URLFormatter:
 
         # Color rules
         json_str = re.sub(r'\"(.*?)\":', 
-            lambda m: f'{self.color(f"{m.group(1)}", Colors.YELLOW, True)}:', json_str)
+            lambda m: f'{self.color(f"{m.group(1)}", Colors.BLUE, True)}:', json_str)
 
         json_str = re.sub(r': \"(.*?)\"', 
             lambda m: f': {self.color(f"\"{m.group(1)}\"", Colors.GREEN)}', json_str)
@@ -280,8 +356,9 @@ class URLFormatter:
         parsed = urlparse(url)
 
         # Decode host
+        
         decoded_host, _ = self.decode_url(parsed.netloc)
-
+        
         # Extract username + domain
         username = None
         domain = parsed.netloc
@@ -291,20 +368,37 @@ class URLFormatter:
         else:
             domain = decoded_host
 
-        result = {
-            "host": parsed.netloc,
-            "decoded_host": decoded_host,
-            "username": username,
-            "domain": domain,
-            "path": parsed.path,
-            "params": {},
-            "url": url
-        }
+        result = {}
+
+        # 1. host
+        result["host"] = parsed.netloc
+
+        # 2. decoded_host (if exists)
+        if decoded_host != parsed.netloc:
+            result["decoded_host"] = decoded_host
+
+        # 3. username (if exists)
+        if username is not None:
+            result["username"] = username
+
+        # 4. domain
+        result["domain"] = domain
+
+        # 5. rest
+        result["path"] = parsed.path
+        result["params"] = {}
+        if(parsed.fragment != ''):
+            result["fragment"] = {}
+        result["url"] = url
+
+        if(decoded_host != parsed.netloc):
+            result["decoded_host"] = decoded_host
+        if(username != None):
+            result["username"] = username
 
         for k, v in parse_qsl(parsed.query, keep_blank_values=True):
             analysis = self.analyze(k, v)
 
-            # Simple params (no issues)
             if not analysis["warnings"] and not analysis["base64"]:
                 result["params"][k] = v
             else:
@@ -318,7 +412,32 @@ class URLFormatter:
 
                 result["params"][k] = param_obj
 
-        return self.color_json(result)
+
+           # =========================
+            # FRAGMENT
+            # =========================
+        raw_fragment, frag_params = self.parse_fragment(parsed.fragment)
+
+        if parsed.fragment:
+            if frag_params:
+                for k, v in frag_params:
+                    analysis = self.analyze(k, v)
+
+                    if not analysis["warnings"] and not analysis["base64"]:
+                        result["fragment"][k] = v
+                    else:
+                        obj = {"value": v}
+
+                        if analysis["base64"]:
+                            obj["base64"] = analysis["base64"]
+
+                        if analysis["warnings"]:
+                            obj["warnings"] = analysis["warnings"]
+
+                        result["fragment"][k] = obj
+            else:
+                result["fragment"]["raw"] = raw_fragment
+        return "\n" + self.color_json(result)
 
 
 # =========================
@@ -361,6 +480,7 @@ def main():
             else:
                 urls.append(args.url)
 
+    # 🚨 SAFETY CHECK (THIS FIXES YOUR CRASH)
     if not urls:
         print("[Error] No valid URL found")
         return
@@ -386,7 +506,7 @@ def main():
                 print(f"[Error] {e}")
         else:
             result = tool.to_json(url) if args.json else tool.print_url(url)
-            print(result)
+            print(result + "\n")
 
 if __name__ == "__main__":
     main()
