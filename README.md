@@ -19,12 +19,6 @@
 ## 📦 Installation
 
 ```bash
-pip install urlf
-```
-
-Or clone manually:
-
-```bash
 git clone https://github.com/Shaikh-Khizer/urlf.git
 cd urlf
 pip install .
