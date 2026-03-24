@@ -361,7 +361,6 @@ def main():
             else:
                 urls.append(args.url)
 
-    # 🚨 SAFETY CHECK (THIS FIXES YOUR CRASH)
     if not urls:
         print("[Error] No valid URL found")
         return
