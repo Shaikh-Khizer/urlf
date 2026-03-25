@@ -21,7 +21,7 @@
 ```bash
 git clone https://github.com/Shaikh-Khizer/urlf.git
 cd urlf
-pip install .
+python3 urlf.py -h
 ```
 
 ---
