@@ -16,12 +16,14 @@
 
 ---
 
-## 📦 Installation
+## 📦 Installation & Setup
 
 ```bash
 git clone https://github.com/Shaikh-Khizer/urlf.git
 cd urlf
-python3 urlf.py -h
+mv urlf.py urlf && chmod +x urlf
+cp urlf $HOME/.local/bin/
+urlf -h
 ```
 
 ---
