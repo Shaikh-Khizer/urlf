@@ -54,6 +54,7 @@ class URLFormatter:
         ratio = printable / len(stripped)
 
         return ratio > 0.9
+
     # =========================
     # COLOR
     # =========================
@@ -88,10 +89,10 @@ class URLFormatter:
             layers += 1
 
         return current, layers
+
     # =========================
     # Base64 decoding 
     # =========================
-
     def is_base64(self, value):
         try:
             v = value.replace('-', '+').replace('_', '/')
@@ -131,9 +132,9 @@ class URLFormatter:
 
         return users
 
-        # =========================
-        # Fragment section
-        # =========================
+    # =========================
+    # Fragment section
+    # =========================
     def parse_fragment(self, fragment):
         if not fragment:
             return None, []
@@ -153,6 +154,7 @@ class URLFormatter:
             return None, result
         # raw fragment
         return fragment, []
+
     # =========================
     # ANALYSIS
     # =========================
@@ -218,13 +220,7 @@ class URLFormatter:
 
             result["users"] = clean
 
-        # Warnings
-        if key.lower() in self.SENSITIVE_PARAMS:
-            result["warnings"].append("Sensitive parameter")
-
-        if decoded.startswith(("http://", "https://", "//")):
-            result["warnings"].append("Possible open redirect")
-
+        
         return result
 
     # =========================
@@ -239,6 +235,8 @@ class URLFormatter:
             return self.color(f"[Error] Invalid URL: {e}", Colors.RED)
 
         # Host + decoding
+        host = parsed.hostname
+        port = parsed.port
         decoded_host, layers = self.decode_url(parsed.netloc)
 
         lines.append(self.color("=" * 60, Colors.CYAN))
@@ -251,13 +249,17 @@ class URLFormatter:
         if "@" in decoded_host:
             user_part, domain_part = decoded_host.split("@", 1)
             lines.append(f"  {self.color('[username]', Colors.CYAN)} {user_part}")
-            lines.append(f"  {self.color('[domain]', Colors.CYAN)} {domain_part}")
+            lines.append(f"  {self.color('[domain]', Colors.CYAN)} {host}")
+            
         else:
-            lines.append(f"  {self.color('[domain]', Colors.CYAN)} {decoded_host}")
+            lines.append(f"  {self.color('[domain]', Colors.CYAN)} {host}")   
+
+        if port is not None:   
+            lines.append(f"  {self.color('[port]', Colors.CYAN)} {port}")
 
         # Path
         if parsed.path:
-            lines.append(f"  {self.color('[path]',Colors.BLUE)} {self.color(parsed.path, Colors.WHITE)}")
+            lines.append(f"  {self.color('[path]', Colors.BLUE)} {self.color(parsed.path, Colors.WHITE)}")
 
         params = parse_qsl(parsed.query, keep_blank_values=True)
 
@@ -289,8 +291,7 @@ class URLFormatter:
             for t, u in analysis["users"]:
                 lines.append(f"    {self.color('[user]', Colors.CYAN)} {t}: {u}")
 
-            for w in analysis["warnings"]:
-                lines.append(f"    {self.color('[!]', Colors.RED)} {w}")
+
         # =========================
         # FRAGMENT
         # =========================
@@ -311,111 +312,86 @@ class URLFormatter:
                     if analysis["base64"]:
                         lines.append(f"    {self.color('[base64]', Colors.CYAN)} = {analysis['base64']}")
 
-                    for w in analysis["warnings"]:
-                        lines.append(f"    {self.color('[!]', Colors.RED)} {w}")
             else:
                 lines.append(f"  {self.color('[raw]', Colors.CYAN)} {raw_fragment}")
+
         lines.append(f"\n  {self.color('Url:', Colors.YELLOW)} {self.color(url, Colors.GREEN)}")
         return "\n".join(lines)
 
-    def write_output(text, file=None):
-        if file:
-            try:
-                with open(file, "a") as f:
-                    f.write(text + "\n")
-            except Exception as e:
-                print(f"[Error] Cannot write to file: {e}")
-        else:
-            print(text)
-
-
     def color_json(self, data):
         json_str = json.dumps(data, indent=2, ensure_ascii=False)
-
+        
         if not self.use_color:
             return json_str
-
-        # Color rules
-        json_str = re.sub(r'\"(.*?)\":', 
-            lambda m: f'{self.color(f"{m.group(1)}", Colors.BLUE, True)}:', json_str)
-
-        json_str = re.sub(r': \"(.*?)\"', 
-            lambda m: f': {self.color(f"\"{m.group(1)}\"", Colors.GREEN)}', json_str)
-
-        json_str = re.sub(r': (\d+)', 
-            lambda m: f': {self.color(m.group(1), Colors.CYAN)}', json_str)
-
-        json_str = re.sub(r': (true|false|null)', 
-            lambda m: f': {self.color(m.group(1), Colors.RED)}', json_str)
-
+        
+        # Color keys blue
+        json_str = re.sub(r'"([^"]+)":', lambda m: f'{self.color(f"\"{m.group(1)}\"", Colors.BLUE, True)}:', json_str)
+        
+        # Color string values green
+        json_str = re.sub(r': "([^"]*)"', lambda m: f': {self.color(f"\"{m.group(1)}\"", Colors.GREEN)}', json_str)
+        
         return json_str
+
     # =========================
     # JSON OUTPUT
     # =========================
     def to_json(self, url):
         parsed = urlparse(url)
 
-        # Decode host
-        
-        decoded_host, _ = self.decode_url(parsed.netloc)
-        
-        # Extract username + domain
+        host = parsed.hostname
+        port = parsed.port
+
+        decoded_host, _ = self.decode_url(parsed.netloc) 
+
         username = None
-        domain = parsed.netloc
 
         if "@" in decoded_host:
-            username, domain = decoded_host.split("@", 1)
-        else:
-            domain = decoded_host
+            username, _ = decoded_host.split("@", 1)
 
         result = {}
 
-        # 1. host
         result["host"] = parsed.netloc
 
-        # 2. decoded_host (if exists)
         if decoded_host != parsed.netloc:
             result["decoded_host"] = decoded_host
 
-        # 3. username (if exists)
         if username is not None:
             result["username"] = username
 
-        # 4. domain
-        result["domain"] = domain
+        result["domain"] = host
 
-        # 5. rest
-        result["path"] = parsed.path
-        result["params"] = {}
-        if(parsed.fragment != ''):
-            result["fragment"] = {}
-        result["url"] = url
+        if port is not None:
+            result["port"] = port
 
-        if(decoded_host != parsed.netloc):
-            result["decoded_host"] = decoded_host
-        if(username != None):
-            result["username"] = username
+        if parsed.path:   
+            result['path'] = parsed.path
+        
+        # =========================
+        # QUERY PARAMS
+        # =========================
+        params_dict = {}
 
         for k, v in parse_qsl(parsed.query, keep_blank_values=True):
             analysis = self.analyze(k, v)
 
-            if not analysis["warnings"] and not analysis["base64"]:
-                result["params"][k] = v
+            if not analysis["base64"]:
+                params_dict[k] = v
             else:
                 param_obj = {"value": v}
-
+                
                 if analysis["base64"]:
                     param_obj["base64"] = analysis["base64"]
+                
+                params_dict[k] = param_obj
 
-                if analysis["warnings"]:
-                    param_obj["warnings"] = analysis["warnings"]
+        if params_dict:
+            result["params"] = params_dict
 
-                result["params"][k] = param_obj
+        # =========================
+        # FRAGMENT
+        # =========================
+        fragment_dict = {}
 
-
-           # =========================
-            # FRAGMENT
-            # =========================
         raw_fragment, frag_params = self.parse_fragment(parsed.fragment)
 
         if parsed.fragment:
@@ -423,22 +399,22 @@ class URLFormatter:
                 for k, v in frag_params:
                     analysis = self.analyze(k, v)
 
-                    if not analysis["warnings"] and not analysis["base64"]:
-                        result["fragment"][k] = v
+                    if not analysis["base64"]:
+                        fragment_dict[k] = v
                     else:
                         obj = {"value": v}
-
+                        
                         if analysis["base64"]:
                             obj["base64"] = analysis["base64"]
-
-                        if analysis["warnings"]:
-                            obj["warnings"] = analysis["warnings"]
-
-                        result["fragment"][k] = obj
+                        
+                        fragment_dict[k] = obj
             else:
-                result["fragment"]["raw"] = raw_fragment
-        return "\n" + self.color_json(result)
+                fragment_dict["raw"] = raw_fragment
 
+        if fragment_dict:
+            result["fragment"] = fragment_dict
+        result['Url'] = url
+        return "\n" + self.color_json(result)
 
 # =========================
 # MAIN
@@ -480,7 +456,6 @@ def main():
             else:
                 urls.append(args.url)
 
-    # 🚨 SAFETY CHECK (THIS FIXES YOUR CRASH)
     if not urls:
         print("[Error] No valid URL found")
         return
